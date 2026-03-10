@@ -59,15 +59,21 @@ def _try_parse_product_times(product_folder: str) -> Tuple[Optional[str], Option
 
 class L1_event:
     """
-    ΦSat-2 L1 event 
+    Represent a local ΦSat-2 L1 scene together with its array data, metadata,
+    and derived in-memory tiles.
 
-    Core:
-      - open:     from_path()
-      - process:  rgb(), index()
-      - geo:      crop_px()
-      - tiling:   to_tiles() / make_tiles()
-      - export:   export_to_tif()
-      - infos:    show_event_info(), show_tiles_info()  (PyRawS-like)
+    This class is the main high-level entry point for loading a ΦSat-2 product,
+    accessing spectral bands, computing simple spectral products, cropping the
+    scene in pixel coordinates, splitting it into tiles, plotting its geographic
+    location, and exporting arrays to GeoTIFF.
+
+    An event stores the full scene as a NumPy array with shape `(C, H, W)`, where
+    `C` is the number of bands, and keeps a metadata dictionary containing
+    geospatial information such as CRS, affine transform, bounds, wavelengths,
+    and product-related paths.
+
+    The recommended constructor is :meth:`from_path`, which reads a local product
+    folder and initializes the event from disk.
     """
 
     # alias wavelengths (nm) -> resolve by closest wavelength
@@ -128,6 +134,33 @@ class L1_event:
         verbose: bool = True,
         device: str = "cpu",
     ) -> "L1_event":
+        
+        """
+        Create an :class:`L1_event` from a local ΦSat-2 product folder.
+
+        This class method loads one scene from disk using the ΦSat-2 L1 reader,
+        builds the underlying `(C, H, W)` array, and attaches the corresponding
+        metadata dictionary.
+
+        Args:
+            product_folder: Path to the local ΦSat-2 product folder.
+            scene_id: Scene index to load from the product.
+            product_kind: Product variant to load, for example `"BC"`.
+            multiband: Whether to read the product as a multiband array.
+            bands: Optional subset of band indices to read. If `None`, all available
+                bands are loaded.
+            as_float32: Whether to cast the loaded array to `float32`.
+            verbose: If `True`, print a short loading message.
+            device: Target device used when converting the event to a torch tensor.
+
+        Returns:
+            A new :class:`L1_event` instance initialized from the requested product.
+
+        Raises:
+            FileNotFoundError: If the product folder or required files are missing.
+            ValueError: If the requested scene or product configuration is invalid.
+        """
+
         if verbose:
             print("[PyRawPh] Loading ΦSat-2 L1 from:", product_folder)
 
@@ -150,9 +183,33 @@ class L1_event:
 
     # basic getters
     def as_numpy(self) -> np.ndarray:
+        """
+        Return the event data as a NumPy array.
+
+        The returned array is the internal scene array stored by the event and is
+        expected to have shape `(C, H, W)`.
+
+        Returns:
+            The event data as a NumPy array of shape `(C, H, W)`.
+        """
         return self._arr
 
     def as_tensor(self, as_float32: bool = True):
+        """
+        Return the event data as a PyTorch tensor on the configured device.
+
+        Args:
+            as_float32: If `True`, cast the tensor to `torch.float32` before moving
+                it to the target device.
+
+        Returns:
+            A PyTorch tensor containing the event data, typically with shape
+            `(C, H, W)`.
+
+        Raises:
+            ImportError: If PyTorch is not available in the current environment.
+        """
+
         if torch is None:
             raise ImportError("torch is not available")
         t = torch.from_numpy(self._arr)
@@ -161,14 +218,56 @@ class L1_event:
         return t.to(self._device)
 
     def get_meta(self) -> Dict[str, Any]:
+        """
+        Return the metadata dictionary associated with the event.
+
+        The metadata may contain fields such as CRS, affine transform, bounds,
+        wavelengths, product paths, sensing time, and creation time.
+
+        Returns:
+            The event metadata dictionary.
+        """
         return self._meta
 
     def get_wavelengths(self) -> List[Optional[int]]:
+        """
+        Return the list of band center wavelengths in nanometers.
+
+        The values are read from the `"band_wavelength_nm"` entry of the metadata.
+        If no wavelength information is available, an empty list is returned.
+
+        Returns:
+            A list of wavelengths in nanometers, or an empty list if unavailable.
+        """
         w = self._meta.get("band_wavelength_nm", None)
         return list(w) if isinstance(w, (list, tuple)) else []
 
     # band resolving (closest wavelength)
     def _resolve_band(self, band: BandSpec) -> int:
+        """
+        Resolve a band specification to a zero-based band index.
+
+        The resolver accepts several selector formats:
+        - integer band indices,
+        - float wavelengths in nanometers,
+        - strings such as `"842nm"`, `"3"`, `"B3"`, or `"BAND_3"`,
+        - spectral aliases such as `"BLUE"`, `"GREEN"`, `"RED"`, `"RE1"`,
+        `"RE2"`, `"RE3"`, or `"NIR"`.
+
+        When a wavelength or alias is provided, the closest available wavelength in
+        the event metadata is used.
+
+        Args:
+            band: Band selector to resolve.
+
+        Returns:
+            The resolved zero-based band index.
+
+        Raises:
+            ValueError: If the band specification is invalid, out of range, or cannot
+                be resolved from the available wavelength metadata.
+        """
+        
         C = int(self._arr.shape[0])
 
         if isinstance(band, int):
@@ -217,6 +316,27 @@ class L1_event:
         raise ValueError(f"Cannot resolve band spec: {band!r}")
 
     def get_band(self, band: BandSpec) -> np.ndarray:
+        """
+        Return one band from the event as a 2D array.
+
+        The band can be selected by:
+        - integer band index,
+        - float wavelength in nanometers,
+        - string specification such as `"NIR"`, `"RED"`, `"B3"`, `"BAND_7"`,
+            or `"842nm"`.
+
+        String aliases are resolved through the event wavelength metadata using the
+        closest matching wavelength when needed.
+
+        Args:
+            band: Band selector.
+
+        Returns:
+            A 2D NumPy array of shape `(H, W)` corresponding to the selected band.
+
+        Raises:
+            ValueError: If the band specification cannot be resolved.
+        """
         i = self._resolve_band(band)
         return self._arr[i]
 
@@ -228,8 +348,22 @@ class L1_event:
         arr: np.ndarray | None = None,
     ) -> np.ndarray:
         """
-        RGB composite from 3 bands. If `arr` is provided, it must be shaped (C,H,W)
-        and use the same band order as the event.
+        Build an RGB composite from three selected bands.
+
+        By default, the composite uses the `"RED"`, `"GREEN"`, and `"BLUE"` aliases.
+        An optional source array can be provided instead of the event internal array,
+        but it must follow the same band ordering and use shape `(C, H, W)`.
+
+        Args:
+            bands: A length-3 sequence describing the red, green, and blue channels.
+                Each entry can use any valid band selector supported by
+                :meth:`get_band`.
+            stretch: Percentile stretch applied before composing the RGB image.
+            arr: Optional source array with shape `(C, H, W)`. If `None`, the event
+                internal array is used.
+
+        Returns:
+            An RGB image as a NumPy array, typically with shape `(H, W, 3)`.
         """
         src = self._arr if arr is None else arr
 
@@ -241,14 +375,25 @@ class L1_event:
 
     def index(self, name: str, **kwargs) -> np.ndarray:
         """
-        Minimal built-in indices:
-          - NDVI: (NIR - RED)   / (NIR + RED)
-          - NDWI: (GREEN - NIR) / (GREEN + NIR)
+        Compute a built-in normalized spectral index.
 
-        Band selectors (nir/red/green) can be:
-          - int (band index)
-          - float (wavelength in nm)
-          - str alias ("NIR","RED","GREEN","B3","BAND_7", ...)
+        Currently supported indices are:
+        - `"NDVI"`: `(NIR - RED) / (NIR + RED)`
+        - `"NDWI"`: `(GREEN - NIR) / (GREEN + NIR)`
+
+        Band selectors can be overridden through keyword arguments. For example,
+        `nir`, `red`, and `green` may each be given as an integer band index, a
+        wavelength in nanometers, or a string alias such as `"NIR"` or `"B3"`.
+
+        Args:
+            name: Name of the spectral index to compute.
+            **kwargs: Optional band selector overrides used by the selected index.
+
+        Returns:
+            A 2D NumPy array containing the computed index.
+
+        Raises:
+            ValueError: If the requested index name is not supported.
         """
         n = name.strip().upper()
 
@@ -267,8 +412,27 @@ class L1_event:
     # geo / crop
     def crop_px(self, y0: int, y1: int, x0: int, x1: int) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        Pixel crop; returns (arr_crop, meta_crop).
-        Clamps to image bounds and updates transform + bounds if available.
+        Crop the event in pixel coordinates and return the cropped array and metadata.
+
+        The crop is defined using half-open intervals `[y0:y1, x0:x1]` in image
+        coordinates. Bounds are clamped to the valid image extent. When geospatial
+        metadata is available, the affine transform and geographic bounds are updated
+        to match the cropped window.
+
+        Args:
+            y0: Start row index.
+            y1: End row index (exclusive).
+            x0: Start column index.
+            x1: End column index (exclusive).
+
+        Returns:
+            A tuple `(arr_crop, meta_crop)` where:
+            - `arr_crop` is the cropped array with shape `(C, h, w)`,
+            - `meta_crop` is a copy of the metadata updated with the cropped size and,
+                when possible, updated transform and bounds.
+
+        Raises:
+            ValueError: If the resulting crop is empty or invalid after clamping.
         """
         H, W = int(self._arr.shape[1]), int(self._arr.shape[2])
 
@@ -303,10 +467,26 @@ class L1_event:
     # tiling
     def to_tiles(self, tile_size: int = 512, overlap: int = 0, drop_last: bool = False) -> List[L1_tile]:
         """
-        Create a grid of in-memory tiles and return them.
+        Split the event into a regular grid of in-memory tiles.
 
-        If drop_last=False: border tiles can be smaller than tile_size.
-        If drop_last=True: only full tiles (tile_size x tile_size) are kept.
+        Tiles are extracted from the event array using a sliding window with optional
+        overlap. Each produced tile is stored as an :class:`L1_tile` instance and the
+        internal tile collection of the event is replaced by the generated tiles.
+
+        If `drop_last=False`, border tiles are kept even if they are smaller than
+        `tile_size`. If `drop_last=True`, only full tiles are retained.
+
+        Args:
+            tile_size: Tile size in pixels for both height and width.
+            overlap: Overlap in pixels between consecutive tiles.
+            drop_last: Whether to discard incomplete border tiles.
+
+        Returns:
+            A list of generated :class:`L1_tile` objects.
+
+        Raises:
+            ValueError: If `overlap` does not satisfy
+                `0 <= overlap < tile_size`.
         """
         H, W = int(self._arr.shape[1]), int(self._arr.shape[2])
         if overlap < 0 or overlap >= tile_size:
@@ -351,13 +531,40 @@ class L1_event:
         return tiles
 
     def make_tiles(self, tile_size: int = 512, overlap: int = 0, drop_last: bool = False) -> List[L1_tile]:
+        """
+        Alias for :meth:`to_tiles`.
+
+        This method exists for API convenience and forwards all arguments to
+        :meth:`to_tiles`.
+
+        Args:
+            tile_size: Tile size in pixels for both height and width.
+            overlap: Overlap in pixels between consecutive tiles.
+            drop_last: Whether to discard incomplete border tiles.
+
+        Returns:
+            A list of generated :class:`L1_tile` objects.
+        """
         return self.to_tiles(tile_size=tile_size, overlap=overlap, drop_last=drop_last)
 
     # tiles infos
     def get_tiles_names(self, tiles_idx=None) -> List[str]:
         """
-        Return names of the tiles requested through tiles_idx from tiles collection.
-        PyRawS-like signature.
+        Return the names of the currently available tiles.
+
+        If `tiles_idx` is not provided, names for all tiles in the current tile
+        collection are returned. If a subset of indices is given, only the
+        corresponding tile names are returned, in the requested order.
+
+        Args:
+            tiles_idx: Optional iterable of tile indices to query.
+
+        Returns:
+            A list of tile names.
+
+        Raises:
+            ValueError: If the tile collection is empty.
+            IndexError: If one of the requested tile indices is out of range.
         """
         if len(self._tiles) == 0:
             raise ValueError("Empty tiles lists.")
@@ -372,8 +579,23 @@ class L1_event:
 
     def get_tiles_info(self, tiles_idx=None) -> Dict[str, Any]:
         """
-        Return dict {tile_name: tile_info_tuple}.
-        PyRawS-like signature.
+        Return structured information for the currently available tiles.
+
+        Each entry is obtained from :meth:`L1_tile.get_tile_info` and stored in a
+        dictionary keyed by tile name. The corresponding value is a tuple containing
+        the tile name, sensing time, creation time, tile corner coordinates, and tile
+        footprint coordinates.
+
+        Args:
+            tiles_idx: Optional iterable of tile indices to query. If `None`, all
+                tiles are included.
+
+        Returns:
+            A dictionary mapping each tile name to its information tuple.
+
+        Raises:
+            ValueError: If the tile collection is empty.
+            IndexError: If one of the requested tile indices is out of range.
         """
         if len(self._tiles) == 0:
             raise ValueError("Empty tiles lists.")
@@ -392,7 +614,19 @@ class L1_event:
         return dict(zip(tiles_names, tiles_info))
 
     def show_tiles_info(self) -> None:
-        """Print tiles info (same style as PyRawS). """
+        """
+        Print human-readable information for all currently available tiles.
+
+        For each tile, this method prints a PyRawS-style summary including the tile
+        name, sensing time, creation time, corner coordinates, and footprint
+        coordinates.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If the tile collection is empty.
+        """
         tiles_info = self.get_tiles_info()
         tiles_names = list(tiles_info.keys())
 
@@ -417,12 +651,46 @@ class L1_event:
     
     def show_bands(self, bands=None, tile=0, **kwargs) -> None:
         """
-        Convenience wrapper (PyRawS-like): show bands for one tile (default: tile 0).
+        Display one or more bands for a selected tile.
+
+        This is a convenience wrapper around :meth:`L1_tile.show_bands`. By default,
+        it visualizes the first tile in the current collection.
+
+        Args:
+            bands: Optional sequence of band selectors to display. If `None`, all
+                bands of the selected tile are shown.
+            tile: Tile index or tile name identifying which tile to visualize.
+            **kwargs: Additional keyword arguments forwarded to
+                :meth:`L1_tile.show_bands`, such as downsampling, max_size, stretch,
+                or cmap.
+
+        Returns:
+            None.
+
+        Raises:
+            IndexError: If the requested tile index is out of range.
+            KeyError: If the requested tile name does not exist.
+            ValueError: If one of the requested band selectors cannot be resolved.
         """
         t = self.get_tile(tile)
         t.show_bands(bands=bands, **kwargs)
 
     def get_tile(self, idx_or_name: Union[int, str]) -> L1_tile:
+        """
+        Return one tile from the current tile collection.
+
+        A tile can be retrieved either by integer index or by its `tile_name`.
+
+        Args:
+            idx_or_name: Tile index or tile name.
+
+        Returns:
+            The requested :class:`L1_tile` instance.
+
+        Raises:
+            IndexError: If an integer index is out of range.
+            KeyError: If a tile name is requested but no matching tile exists.
+        """
         if isinstance(idx_or_name, int):
             return self._tiles[idx_or_name]
         name = str(idx_or_name)
@@ -433,7 +701,15 @@ class L1_event:
 
     def show_event_info(self) -> None:
         """
-        Lightweight event info.
+        Print a concise summary of the current event.
+
+        The printed summary includes the scene identifier, product kind, product
+        folder, source path, array shape and dtype, CRS, geographic bounds, band
+        wavelengths, GL file path, processing configuration path, and the current
+        number of in-memory tiles.
+
+        Returns:
+            None.
         """
         print(colored("Event:", "blue"), f"scene_id={self._scene_id} kind={self._product_kind}")
         print("  folder:", colored(self._product_folder, "red"))
@@ -454,18 +730,30 @@ class L1_event:
         title: Optional[str] = None,
     ):
         """
-        Plot event location on an optional world basemap.
+        Plot the geographic location of the event and optionally overlay tile bounds.
 
-        Parameters
-        ----------
-        mode:
-        - "bounds": axis-aligned rectangle from GeoTIFF bounds
-        - "footprint": polygon footprint derived from GL_scene_<id>.json
-        world:
-        - if True, attempts to plot a world basemap (optional geopandas)
-        tiles_idx:
-        - when mode="bounds": overlays selected tiles bounds
-        - when mode="footprint": overlays selected tiles bounds (still rectangles)
+        Two plotting modes are supported:
+        - `"bounds"`: plot the axis-aligned geographic bounding box stored in the
+        event metadata,
+        - `"footprint"`: plot the scene footprint derived from the GL JSON file
+        referenced by the metadata.
+
+        If `tiles_idx` is provided, the geographic bounds of the selected tiles are
+        overlaid as rectangles on top of the scene plot.
+
+        Args:
+            mode: Plotting mode, either `"bounds"` or `"footprint"`.
+            world: If `True`, attempt to display the scene on top of a world basemap.
+            tiles_idx: Optional iterable of tile indices to overlay.
+            title: Optional plot title. If `None`, a default title based on the scene
+                identifier and product kind is used.
+
+        Returns:
+            The Matplotlib axes used for the plot.
+
+        Raises:
+            ValueError: If the requested mode is unknown, or if the required
+                geospatial metadata is missing for the selected mode.
         """
         m = str(mode).strip().lower()
 
@@ -525,8 +813,28 @@ class L1_event:
         **kwargs,
     ) -> str:
         """
-        Export current event (or provided arr/meta) to GeoTIFF.
-        kwargs forwarded to utils.export_utils.export_to_tif
+        Export the event data, or a provided array, to a GeoTIFF file.
+
+        If `arr` is not provided, the event internal array is exported. If `meta` is
+        not provided, the event metadata is used. Additional keyword arguments are
+        forwarded to the low-level GeoTIFF export utility.
+
+        Args:
+            out_path: Output path of the GeoTIFF file to create.
+            arr: Optional array to export. If `None`, the event internal array is
+                used.
+            meta: Optional metadata dictionary to use for export. If `None`, the
+                event metadata is used.
+            **kwargs: Additional keyword arguments forwarded to the underlying export
+                utility.
+
+        Returns:
+            The output path of the written GeoTIFF file.
+
+        Raises:
+            ValueError: If the provided metadata is incomplete or incompatible with
+                GeoTIFF export.
+            OSError: If the file cannot be written.
         """
         if arr is None:
             arr = self._arr

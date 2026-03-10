@@ -51,22 +51,25 @@ def plot_bounds(
     pad_deg: float = 1.0,
 ):
     """
-    Plot a bounds rectangle (left,bottom,right,top) on an optional world basemap.
+    Plot a geographic bounds rectangle on an optional world basemap.
 
-    Parameters
-    ----------
-    bounds : BoundingBox | tuple
-        Either rasterio BoundingBox-like (left,bottom,right,top attrs) or a 4-tuple.
-    ax : matplotlib axis | None
-        If None -> creates a new figure/axis.
-    world : bool
-        If True -> tries to plot Natural Earth lowres (if available in geopandas datasets).
-        If not available -> still plots the rectangle.
-    title : str | None
-    linewidth : float
-    pad_deg : float
-        Padding (in degrees) added around the rectangle when setting axis limits.
-        (Works well for EPSG:4326; for projected CRSs, set to a larger value.)
+    The input bounds may be given either as a `BoundingBox`-like object with
+    `left`, `bottom`, `right`, and `top` attributes, or as a
+    `(left, bottom, right, top)` tuple. If requested and available, a world
+    basemap is drawn before overlaying the rectangle.
+
+    Args:
+        bounds: Geographic bounds to plot.
+        ax: Optional Matplotlib axes. If `None`, a new figure and axes are
+            created.
+        world: If `True`, attempt to draw a world basemap before plotting the
+            bounds rectangle.
+        title: Optional plot title.
+        linewidth: Line width used for the rectangle.
+        pad_deg: Padding added around the rectangle when setting axis limits.
+
+    Returns:
+        The Matplotlib axes used for the plot.
     """
     left = float(getattr(bounds, "left", bounds[0]))
     bottom = float(getattr(bounds, "bottom", bounds[1]))
@@ -107,13 +110,30 @@ def plot_gl_footprint(
     pad_deg: float = 0.02,
 ):
     """
-    Plot a rotated footprint polygon derived from GL_scene_<id>.json.
+    Plot a rotated footprint polygon from a GL scene JSON file.
 
-    Notes
-    -----
-    - Works in EPSG:4326 (lon/lat) since GL provides Lon/Lat.
-    - If world=True, tries to draw a basemap (geopandas built-in dataset) if available.
-    - Automatically recenters/zooms around the footprint (pad_deg in degrees).
+    The JSON file is expected to contain a `Geolocated_Points` field with
+    longitude, latitude, and grid coordinates. The function reconstructs the
+    scene perimeter from the geolocated grid, plots the resulting polygon, and
+    zooms around it. If requested and available, a world basemap is drawn in the
+    background.
+
+    Args:
+        gl_json_path: Path to the `GL_scene_<id>.json` file.
+        ax: Optional Matplotlib axes. If `None`, a new figure and axes are
+            created.
+        world: If `True`, attempt to draw a world basemap before plotting the
+            footprint.
+        title: Optional plot title.
+        linewidth: Line width parameter for the footprint display.
+        pad_deg: Padding added around the plotted footprint when setting axis
+            limits.
+
+    Returns:
+        The Matplotlib axes used for the plot.
+
+    Raises:
+        ValueError: If the JSON file does not contain any `Geolocated_Points`.
     """
 
     if ax is None:

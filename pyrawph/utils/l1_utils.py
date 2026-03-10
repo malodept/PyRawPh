@@ -29,21 +29,59 @@ def read_L1_event_from_folder_phisat2(
     as_float32: bool = True,
 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """
-    ΦSat-2 L1 local reader.
+    Read one local ΦSat-2 L1 scene from a product folder.
 
-    Expected layout:
-      <product_folder>/
-        bands/
-          scene_0_BC_multiband.tiff
-          scene_0_BC_band_0.tiff ... scene_0_BC_band_*.tiff
-        geolocation/GL_scene_0.json
-        processing_config.json
-        session_4663_metadata.json   (or logs/session_4663_metadata.json)
-        ...
+    This reader loads either a multiband GeoTIFF or a set of per-band GeoTIFF
+    files from the local product structure, assembles the scene as a NumPy array
+    with shape `(C, H, W)`, and returns it together with a minimal metadata
+    dictionary.
+
+    Expected folder layout:
+        <product_folder>/
+            bands/
+                scene_<scene_id>_<product_kind>_multiband.tiff
+                scene_<scene_id>_<product_kind>_band_0.tiff
+                scene_<scene_id>_<product_kind>_band_1.tiff
+                ...
+            geolocation/
+                GL_scene_<scene_id>.json
+            processing_config.json
+            session_*_metadata.json
+            logs/
+                session_*_metadata.json
+
+    If `multiband=True`, the function reads
+    `bands/scene_<scene_id>_<product_kind>_multiband.tiff`.
+    If `multiband=False`, it reads one file per requested band from
+    `bands/scene_<scene_id>_<product_kind>_band_<b>.tiff`.
+
+    The returned metadata includes raster size, dtype, CRS, affine transform,
+    normalized bounds, selected band indices, and, when available, sidecar paths
+    such as the GL JSON file, processing configuration file, and session metadata
+    file. If session metadata contains imager information, the function also
+    extracts the number of bands and per-band center wavelengths for the selected
+    bands.
+
+    Args:
+        product_folder: Path to the local ΦSat-2 product folder.
+        scene_id: Scene index to load.
+        product_kind: Product variant to load, for example `"BC"`, `"RR"`,
+            `"AC"`, or `"DN"`. The value is normalized to uppercase.
+        multiband: If `True`, read a single multiband GeoTIFF. If `False`, read
+            one GeoTIFF per band and stack them into a multiband array.
+        bands: Optional zero-based band indices to read. If `None`, all available
+            bands are read from the multiband file, or inferred from per-band file
+            names when `multiband=False`.
+        as_float32: If `True`, cast the returned array to `np.float32`.
 
     Returns:
-      arr: np.ndarray  shape (C,H,W)
-      meta: dict       minimal metadata (crs, transform, bounds, wavelengths if found, etc.)
+        A tuple `(arr, meta)` where:
+        - `arr` is a NumPy array with shape `(C, H, W)`,
+        - `meta` is a dictionary containing raster and product metadata.
+
+    Raises:
+        FileNotFoundError: If the expected multiband file or one of the requested
+            per-band files does not exist.
     """
     product_kind = product_kind.upper()
 

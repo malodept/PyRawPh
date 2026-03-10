@@ -10,12 +10,21 @@ BoundsLike = Union[BoundingBox, Tuple[float, float, float, float]]
 
 def normalize_bounds(bb: BoundsLike | None) -> BoundingBox | None:
     """
-    Ensure bounds are always (left < right) and (bottom < top).
+    Normalize geographic bounds to a standard raster-style ordering.
 
-    Accepts either a rasterio BoundingBox or a (left, bottom, right, top) tuple.
-    Returns a rasterio BoundingBox (or None).
+    This function accepts either a `rasterio.coords.BoundingBox` or a
+    `(left, bottom, right, top)` tuple and returns a `BoundingBox` such that:
 
-    Note: no need to import rasterio here; BoundingBox is enough.
+    - `left < right`
+    - `bottom < top`
+
+    If the input is `None`, `None` is returned unchanged.
+
+    Args:
+        bb: Input bounds as a `BoundingBox`, a 4-tuple, or `None`.
+
+    Returns:
+        A normalized `BoundingBox`, or `None` if the input is `None`.
     """
     if bb is None:
         return None

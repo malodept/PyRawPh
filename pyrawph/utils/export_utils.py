@@ -16,12 +16,38 @@ def export_to_tif(
     bigtiff: str = "if_safer",
 ) -> str:
     """
-    Export an array to GeoTIFF using meta["crs"] and meta["transform"].
+    Export an array to GeoTIFF using geospatial metadata.
 
-    Accepted shapes:
-      - (H, W)
-      - (C, H, W)
-      - (H, W, 3) / (H, W, 4)  (converted to (C, H, W))
+    This function writes a NumPy-compatible array to a GeoTIFF file using
+    `meta["crs"]` and `meta["transform"]` as the spatial reference.
+
+    Accepted input shapes are:
+    - `(H, W)` for a single-band image,
+    - `(C, H, W)` for a multiband image,
+    - `(H, W, 3)` or `(H, W, 4)` for RGB or RGBA data, automatically converted
+    to channel-first `(C, H, W)`.
+
+    The output directory is created automatically if it does not already exist.
+    If `dtype` is provided, the data is cast before writing. If `nodata` is
+    provided for floating-point output, NaN values are replaced with that nodata
+    value before export.
+
+    Args:
+        out_path: Destination path of the GeoTIFF file to create.
+        arr: Array to export. Any array-like input is converted to `np.ndarray`.
+        meta: Metadata dictionary containing at least `"crs"` and `"transform"`.
+        dtype: Optional output dtype. If `None`, the input array dtype is kept.
+        nodata: Optional nodata value to store in the GeoTIFF profile. For
+            floating-point outputs, NaN values are replaced by this value.
+        compress: Compression method passed to the GeoTIFF profile.
+        bigtiff: BigTIFF policy passed to the GeoTIFF profile.
+
+    Returns:
+        The output path of the written GeoTIFF file.
+
+    Raises:
+        ValueError: If `arr` is not 2D or 3D.
+        KeyError: If `meta["crs"]` or `meta["transform"]` is missing.
     """
     if not isinstance(arr, np.ndarray):
         arr = np.asarray(arr)

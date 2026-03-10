@@ -72,6 +72,17 @@ def _resolve_band_from_meta(
 
 @dataclass
 class L1_tile:
+    """
+    Represent one local tile extracted from an L1 event.
+
+    A tile stores a local multiband array together with its metadata and provides
+    convenience methods for array/tensor conversion, geographic corner retrieval,
+    tile inspection, band visualization, and optional location plotting.
+
+    The tile array is expected to follow the `(C, H, W)` convention, where `C` is
+    the number of spectral bands. Metadata may include geographic bounds, CRS,
+    band wavelengths, sensing time, and creation time.
+    """
     tile_name: str
     arr: np.ndarray
     meta: Dict[str, Any]
@@ -79,9 +90,32 @@ class L1_tile:
 
     # basic getters
     def as_numpy(self) -> np.ndarray:
+        """
+        Return the tile data as a NumPy array.
+
+        The returned array is the internal tile array stored by the object and is
+        expected to have shape `(C, H, W)`.
+
+        Returns:
+            The tile data as a NumPy array of shape `(C, H, W)`.
+        """
         return self.arr
 
     def as_tensor(self, as_float32: bool = True):
+        """
+        Return the tile data as a PyTorch tensor on the configured device.
+
+        Args:
+            as_float32: If `True`, cast the tensor to `torch.float32` before moving
+                it to the target device.
+
+        Returns:
+            A PyTorch tensor containing the tile data, typically with shape
+            `(C, H, W)`.
+
+        Raises:
+            ImportError: If PyTorch is not available in the current environment.
+        """
         if torch is None:
             raise ImportError("torch is not available")
         t = torch.from_numpy(self.arr)
@@ -91,6 +125,25 @@ class L1_tile:
 
     # Helpers
     def get_tile_coordinates(self, latlon_format: bool = True) -> List[List[float]]:
+        """
+        Return the four tile corner coordinates derived from the metadata bounds.
+
+        Corners are returned in the following order:
+        top-left, bottom-left, bottom-right, top-right.
+
+        Coordinates are extracted from `meta["bounds"]`. The returned values are
+        formatted as `[y, x]` pairs. This method does not reproject coordinates; it
+        only reformats the stored bounds values.
+
+        Args:
+            latlon_format: If `True`, return coordinates in `[lat, lon]`-style
+                ordering. In the current implementation, coordinates are returned as
+                `[y, x]` pairs in all cases.
+
+        Returns:
+            A list of four corner coordinates. If no bounds are available, returns an
+            empty list.
+        """
         b = self.meta.get("bounds", None)
         crs = self.meta.get("crs", None)
         if b is None:
@@ -110,12 +163,42 @@ class L1_tile:
         return [[y, x] for (x, y) in corners_xy]
 
     def get_tile_footprint_coordinates(self, latlon_format: bool = True, closed: bool = False) -> List[List[float]]:
+        """
+        Return the tile footprint coordinates as an ordered polygon-like sequence.
+
+        This method reuses :meth:`get_tile_coordinates` and optionally closes the
+        footprint by repeating the first coordinate at the end.
+
+        Args:
+            latlon_format: Forwarded to :meth:`get_tile_coordinates`.
+            closed: If `True`, append the first coordinate at the end of the returned
+                list.
+
+        Returns:
+            A list of footprint coordinates. If no bounds are available, returns an
+            empty list.
+        """
         coords = self.get_tile_coordinates(latlon_format=latlon_format)
         if closed and coords:
             return coords + [coords[0]]
         return coords
 
     def get_tile_info(self):
+        """
+        Return a compact summary of the tile.
+
+        The returned tuple contains the tile name, sensing time, creation time,
+        corner coordinates, and footprint coordinates.
+
+        Returns:
+            A tuple of the form:
+
+            - tile name,
+            - sensing time,
+            - creation time,
+            - corner coordinates from :meth:`get_tile_coordinates`,
+            - footprint coordinates from :meth:`get_tile_footprint_coordinates`.
+        """
         tile_name = self.tile_name
         sensing_time = self.meta.get("sensing_time", None)
         creation_time = self.meta.get("creation_time", None)
@@ -137,15 +220,30 @@ class L1_tile:
         cmap: str = "viridis",
     ) -> None:
         """
-        Visual inspection of bands.
+        Display one or more tile bands for visual inspection.
 
-        bands:
-          - None -> show all bands
-          - else: list of BandSpec (int, "B3", "842nm", aliases "NIR"/"RED"/...)
-        downsampling:
-          - if True, stride chosen so that max(H,W) ~ max_size
-        stretch:
-          - percentile stretch on each displayed band
+        If `bands` is `None`, all tile bands are displayed. Otherwise, each requested
+        band is resolved from the tile metadata using integer indices, wavelengths in
+        nanometers, or string specifications such as `"B3"`, `"842nm"`, `"NIR"`, or
+        `"RED"`.
+
+        Displayed bands can be downsampled for faster rendering, and each band is
+        independently normalized using a percentile stretch before display.
+
+        Args:
+            bands: Optional sequence of band selectors to display. If `None`, all
+                tile bands are shown.
+            downsampling: If `True`, apply stride-based downsampling so that the
+                displayed image size remains manageable.
+            max_size: Target maximum size used to determine the downsampling stride.
+            stretch: Lower and upper percentiles used for contrast stretching.
+            cmap: Matplotlib colormap used for display.
+
+        Returns:
+            None.
+
+        Raises:
+            ValueError: If one of the requested band selectors cannot be resolved.
         """
         arr = self.arr
         C, H, W = int(arr.shape[0]), int(arr.shape[1]), int(arr.shape[2])
@@ -201,8 +299,21 @@ class L1_tile:
 
     def plot_location(self, world: bool = True, title: Optional[str] = None):
         """
-        Optional world-map plot (requires geopandas available in optional_plots).
-        Falls back to just the rectangle if basemap isn't available.
+        Plot the geographic location of the tile from its metadata bounds.
+
+        This method delegates the actual plotting to
+        `pyrawph.utils.optional_plots.plot_bounds`. If available, a world basemap can
+        be shown in the background; otherwise the tile rectangle alone is plotted.
+
+        Args:
+            world: If `True`, attempt to display the tile on top of a world basemap.
+            title: Optional plot title. If `None`, the tile name is used.
+
+        Returns:
+            The Matplotlib axes used for the plot.
+
+        Raises:
+            ValueError: If the tile metadata does not contain geographic bounds.
         """
         from ..utils.optional_plots import plot_bounds
 
