@@ -224,6 +224,4 @@ The documentation includes:
 - Arrays are handled in **channel-first** format `(C, H, W)` for core event and tile data.
 - GeoTIFF export requires geospatial metadata, especially `crs` and `transform`.
 
-## License
 
-Add your project license here.
